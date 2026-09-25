@@ -1,0 +1,84 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: visora-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: visora
+      POSTGRES_PASSWORD: visora
+      POSTGRES_DB: visora
+    ports:
+      - "5432:5432"
+    volumes:
+      - visora_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U visora -d visora"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api-server:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: visora-api
+    restart: unless-stopped
+    command: ["server"]
+    ports:
+      - "7001:8080"
+    env_file:
+      - ./backend/.env
+    environment:
+      - DATABASE_URL=postgres://visora:visora@postgres:5432/visora?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["worker"]
+    env_file:
+      - ./backend/.env
+    environment:
+      - DATABASE_URL=postgres://visora:visora@postgres:5432/visora?sslmode=disable
+      - WORKER_STUCK_MINUTES=25
+      - WORKER_MAX_ATTEMPTS=3
+      - CRAWL_CONCURRENCY=8
+      - CRAWL_DELAY_MS=50
+      - SERP_CONCURRENCY=4
+      - GEO_CONCURRENCY=1
+      - TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:7001/api
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-0x4AAAAAAFCe9OzpnlWxPY0G}
+    container_name: visora-frontend
+    restart: unless-stopped
+    ports:
+      - "7000:3000"
+    env_file:
+      - ./frontend/.env
+    environment:
+      - API_BASE_URL=http://api-server:8080/api
+      - NEXT_PUBLIC_API_URL=http://localhost:7001/api
+    depends_on:
+      api-server:
+        condition: service_healthy
+
+volumes:
+  visora_pgdata:

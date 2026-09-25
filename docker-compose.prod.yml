@@ -1,0 +1,88 @@
+# Production stack — run standalone:
+#   docker compose -f docker-compose.prod.yml up -d --build
+# Scale workers:
+#   docker compose -f docker-compose.prod.yml up -d --scale worker=2
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: visora-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: visora
+      POSTGRES_PASSWORD: "${DB_PASS:-visora}"
+      POSTGRES_DB: visora
+    volumes:
+      - visora_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U visora -d visora"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api-server:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: visora-api
+    restart: always
+    command: ["server"]
+    ports:
+      - "127.0.0.1:7001:8080"
+    env_file:
+      - ./backend/.env.production
+    environment:
+      - GIN_MODE=release
+      - DATABASE_URL=postgres://visora:${DB_PASS:-visora}@postgres:5432/visora?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    command: ["worker"]
+    env_file:
+      - ./backend/.env.production
+    environment:
+      - DATABASE_URL=postgres://visora:${DB_PASS:-visora}@postgres:5432/visora?sslmode=disable
+      - WORKER_STUCK_MINUTES=25
+      - WORKER_MAX_ATTEMPTS=3
+      - CRAWL_CONCURRENCY=6
+      - CRAWL_DELAY_MS=100
+      - SERP_CONCURRENCY=3
+      - GEO_CONCURRENCY=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: https://api.visora.fybud.com/api
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-0x4AAAAAAFCe9OzpnlWxPY0G}
+    container_name: visora-frontend
+    restart: always
+    ports:
+      - "127.0.0.1:7000:3000"
+    env_file:
+      - ./frontend/.env.production
+    environment:
+      - API_BASE_URL=http://api-server:8080/api
+      - NEXT_PUBLIC_API_URL=https://api.visora.fybud.com/api
+    depends_on:
+      api-server:
+        condition: service_healthy
+
+volumes:
+  visora_pgdata:

@@ -1,0 +1,43 @@
+# ── OS / Editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
+
+# ── Environment files ─────────────────────────────────────────────────────────
+# Never commit real secrets — only commit template files
+.env
+.env.local
+!.env.production       # ← template files ARE committed (no real secrets in them)
+!backend/.env.production
+!frontend/.env.production
+.env.production
+# ── Node / Frontend ───────────────────────────────────────────────────────────
+node_modules/
+.next/
+out/
+.npm/
+*.tsbuildinfo
+frontend/.next/
+frontend/node_modules/
+frontend/out/
+
+# ── Go / Backend ──────────────────────────────────────────────────────────────
+backend/bin/
+backend/*.test
+backend/coverage.out
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+# Keep compose files, ignore override secrets
+docker-compose.override.yml
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Temp / scratch ────────────────────────────────────────────────────────────
+.tmp_recover/
+tmp/
