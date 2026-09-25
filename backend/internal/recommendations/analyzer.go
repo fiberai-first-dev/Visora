@@ -42,6 +42,82 @@ func (l aiRecList) all() []aiRecommendation {
 	return nil
 }
 
+// parseRecommendations accepts the wrapped list we ask for, a bare array, a
+// single item, or several items back to back — models return all of these.
+func parseRecommendations(raw string) []aiRecommendation {
+	body := strings.TrimSpace(raw)
+	if strings.HasPrefix(body, "```") {
+		body = strings.TrimSpace(strings.TrimSuffix(strings.TrimLeft(strings.TrimPrefix(body, "```"), "jsonJSON"), "```"))
+	}
+	if strings.HasPrefix(body, "[") {
+		var arr []aiRecommendation
+		if json.Unmarshal([]byte(body), &arr) == nil {
+			return arr
+		}
+	}
+	var out []aiRecommendation
+	for _, obj := range topLevelObjects(body) {
+		var list aiRecList
+		if json.Unmarshal(obj, &list) == nil && len(list.all()) > 0 {
+			out = append(out, list.all()...)
+			continue
+		}
+		var one aiRecommendation
+		if json.Unmarshal(obj, &one) == nil && strings.TrimSpace(one.Title) != "" {
+			out = append(out, one)
+		}
+	}
+	if len(out) == 0 {
+		var list aiRecList
+		if json.Unmarshal([]byte(llm.ExtractJSONObject(raw)), &list) == nil {
+			out = list.all()
+		}
+	}
+	return out
+}
+
+// topLevelObjects returns each balanced {...} value in s, skipping whatever
+// separates them.
+func topLevelObjects(s string) [][]byte {
+	var out [][]byte
+	depth, start := 0, -1
+	inString, escape := false, false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if inString {
+			switch {
+			case escape:
+				escape = false
+			case ch == '\\':
+				escape = true
+			case ch == '"':
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			if depth > 0 {
+				inString = true
+			}
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			if depth > 0 {
+				depth--
+				if depth == 0 && start >= 0 {
+					out = append(out, []byte(s[start:i+1]))
+					start = -1
+				}
+			}
+		}
+	}
+	return out
+}
+
 // Generate asks the LLM to write page-specific recommendations from crawl,
 // Google, AI-answer and rival evidence. There is no template fallback: a
 // failed call fails the job so the worker retries it.
@@ -140,29 +216,44 @@ Return ONLY JSON:
 {"recommendations":[{"source":"search_visibility","severity":"high","title":"...","detail":"...","action":"...","page_url":"...","target_field":"title","before":"...","after":"..."}]}`,
 		project.Brand, project.Website, project.Category, project.Country, brief)
 
-	raw, err := llm.CompleteJSON(context.Background(), llm.GetModel(), []openai.ChatCompletionMessage{
+	messages := []openai.ChatCompletionMessage{
 		{
 			Role:    openai.ChatMessageRoleSystem,
-			Content: "You write evidence-backed SEO/GEO page edits with exact paste-ready wording. Never invent URLs or facts not in the evidence. Reply with JSON only.",
+			Content: "You write evidence-backed SEO/GEO page edits with exact paste-ready wording. Never invent URLs or facts not in the evidence. Reply with one JSON object whose \"recommendations\" key holds 6-10 items — never a single bare item.",
 		},
 		{Role: openai.ChatMessageRoleUser, Content: prompt},
-	}, 0.3)
+	}
+	raw, err := llm.CompleteJSON(context.Background(), llm.GetModel(), messages, 0.3)
 	if err != nil {
 		return nil, err
 	}
 
-	var result aiRecList
-	if err := json.Unmarshal([]byte(llm.ExtractJSONObject(raw)), &result); err != nil {
-		return nil, fmt.Errorf("parse AI recommendations: %w (%s)", err, truncate(raw, 300))
-	}
-	got := result.all()
+	got := parseRecommendations(raw)
 	recs := cleanRecommendations(project.ID, got)
 	fmt.Printf("recommendations: project %d — AI returned %d, kept %d\n", project.ID, len(got), len(recs))
+
+	// Cheap models sometimes return a single item; ask once for the rest.
+	if len(recs) < minRecommendations {
+		fmt.Printf("recommendations: short reply (brief %d chars, reply %d chars): %s\n", len(brief), len(raw), truncate(raw, 1200))
+		messages = append(messages,
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: raw},
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf(
+				"That is only %d usable item(s). Return the full list: 6-10 items on different page + field pairs, following every rule, as {\"recommendations\":[...]}. Keep the items you already wrote.",
+				len(recs))},
+		)
+		if more, err := llm.CompleteJSON(context.Background(), llm.GetModel(), messages, 0.3); err == nil {
+			got = append(got, parseRecommendations(more)...)
+			recs = cleanRecommendations(project.ID, got)
+			fmt.Printf("recommendations: project %d — after follow-up, kept %d\n", project.ID, len(recs))
+		}
+	}
 	if len(recs) == 0 {
 		return nil, fmt.Errorf("AI returned no usable recommendations (%d raw; reply starts: %s)", len(got), truncate(raw, 300))
 	}
 	return recs, nil
 }
+
+const minRecommendations = 4
 
 var fillerPhrases = []string{
 	"see how it works", "compare options", "get started today", "look no further",

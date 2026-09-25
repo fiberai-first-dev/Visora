@@ -99,21 +99,24 @@ func FindPage(projectID uint, raw string) *db.Page {
 // CompetitorPage is the crawled copy of a rival page (exact URL, else that
 // rival's shallowest page).
 func CompetitorPage(projectID uint, pageURL, domain string) *db.Page {
-	var page db.Page
+	// Find+Limit instead of First: a rival we never crawled is normal, not an error to log.
+	var pages []db.Page
 	if pageURL != "" {
-		if err := db.DB.Where("project_id = ? AND competitor_id IS NOT NULL AND url = ?", projectID, pageURL).
-			Order("id desc").First(&page).Error; err == nil {
-			return &page
+		db.DB.Where("project_id = ? AND competitor_id IS NOT NULL AND url = ?", projectID, pageURL).
+			Order("id desc").Limit(1).Find(&pages)
+		if len(pages) > 0 {
+			return &pages[0]
 		}
 	}
 	host := strings.TrimPrefix(strings.TrimSpace(domain), "www.")
 	if host == "" {
 		return nil
 	}
-	if err := db.DB.Where("project_id = ? AND competitor_id IS NOT NULL AND (url LIKE ? OR url LIKE ?)",
+	db.DB.Where("project_id = ? AND competitor_id IS NOT NULL AND (url LIKE ? OR url LIKE ?)",
 		projectID, "https://"+host+"%", "https://www."+host+"%").
-		Order("depth asc, id desc").First(&page).Error; err == nil {
-		return &page
+		Order("depth asc, id desc").Limit(1).Find(&pages)
+	if len(pages) > 0 {
+		return &pages[0]
 	}
 	return nil
 }
