@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { clearAuthCookies } from "@/lib/clear-auth-cookie";
+import { clearAuthCookies, publicHost } from "@/lib/clear-auth-cookie";
 
 /** Anyone can open these without a session. Login is a modal on `/`. */
 const PUBLIC_PATHS = new Set(["/"]);
@@ -41,12 +41,17 @@ export function middleware(request: NextRequest) {
 
   const loggingOut = request.nextUrl.searchParams.get("logged_out") === "1";
   const loggedIn = !loggingOut && isLoggedIn(request);
-  const to = (path: string) => NextResponse.redirect(new URL(path, request.url));
+  // Behind nginx request.url carries the container's hostname; redirect on the public one.
+  const host = publicHost(request.headers) || request.nextUrl.hostname;
+  const hostWithPort = (request.headers.get("x-forwarded-host") || request.headers.get("host") || host).split(",")[0].trim();
+  const proto = (request.headers.get("x-forwarded-proto") || request.nextUrl.protocol.replace(":", "")).split(",")[0].trim();
+  const origin = `${proto}://${hostWithPort}`;
+  const to = (path: string) => NextResponse.redirect(new URL(path, origin));
 
   // Logout landing — wipe leftovers and never bounce back into /projects.
   if (loggingOut) {
     const res = pathname === "/" ? NextResponse.next() : to("/?logged_out=1");
-    clearAuthCookies(res, request.nextUrl.hostname);
+    clearAuthCookies(res.headers, host);
     res.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
     return res;
   }

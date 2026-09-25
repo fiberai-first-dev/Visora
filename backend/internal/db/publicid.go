@@ -3,6 +3,7 @@ package db
 import (
 	"crypto/rand"
 	"fmt"
+	"log"
 	"strconv"
 
 	"gorm.io/gorm"
@@ -57,6 +58,34 @@ func FindProjectByRef(ref string) (*Project, error) {
 		DB.Model(&project).Update("public_id", project.PublicID)
 	}
 	return &project, nil
+}
+
+// DropStrayProjectColumns removes columns on projects that the Project model
+// does not define. A racing first migration once left NOT NULL columns such
+// as project_id there, which made every project insert fail.
+func DropStrayProjectColumns(gdb *gorm.DB) {
+	if !gdb.Migrator().HasTable(&Project{}) {
+		return
+	}
+	stmt := &gorm.Statement{DB: gdb}
+	if err := stmt.Parse(&Project{}); err != nil {
+		return
+	}
+	known := map[string]bool{}
+	for _, f := range stmt.Schema.Fields {
+		if f.DBName != "" {
+			known[f.DBName] = true
+		}
+	}
+	var cols []string
+	gdb.Raw(`SELECT column_name FROM information_schema.columns
+	         WHERE table_schema = current_schema() AND table_name = 'projects'`).Scan(&cols)
+	for _, col := range cols {
+		if !known[col] {
+			log.Printf("db: dropping stray column projects.%s", col)
+			gdb.Exec(fmt.Sprintf(`ALTER TABLE projects DROP COLUMN IF EXISTS %q`, col))
+		}
+	}
 }
 
 // BackfillPublicIDs adds a nullable public_id, fills existing rows, then

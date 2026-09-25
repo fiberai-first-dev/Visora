@@ -1,12 +1,14 @@
-import { NextResponse } from "next/server";
-import { clearAuthCookies } from "@/lib/clear-auth-cookie";
+import { clearAuthCookies, publicHost } from "@/lib/clear-auth-cookie";
+
+export const dynamic = "force-dynamic";
 
 /** Stay on this host. Expire the HttpOnly session cookie, then land on `/`. */
 export async function GET(request: Request) {
-  const url = new URL(request.url);
-  const dest = new URL("/?logged_out=1", url.origin);
-  const response = NextResponse.redirect(dest, 303);
-  clearAuthCookies(response, url.hostname);
-  response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
-  return response;
+  const headers = new Headers({
+    // Relative, so the browser stays on the public host rather than the container's.
+    Location: "/?logged_out=1",
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+  });
+  clearAuthCookies(headers, publicHost(request.headers));
+  return new Response(null, { status: 303, headers });
 }

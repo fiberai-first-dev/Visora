@@ -2,6 +2,8 @@ package api
 
 import (
 	"fmt"
+	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"visora-backend/internal/db"
@@ -18,6 +20,12 @@ func ResolveProjectID() gin.HandlerFunc {
 		}
 		project, err := db.FindProjectByRef(ref)
 		if err != nil {
+			// Handlers pass :id straight to First(&p, id); a non-numeric value
+			// there is treated as raw SQL, so unknown public ids stop here.
+			if _, convErr := strconv.ParseUint(ref, 10, 64); convErr != nil {
+				c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+				return
+			}
 			c.Next()
 			return
 		}

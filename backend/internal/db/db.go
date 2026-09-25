@@ -37,8 +37,16 @@ func Connect() {
 			return err
 		}
 		defer conn.Exec("SELECT pg_advisory_unlock(?)", migrationLockKey)
-		BackfillPublicIDs(conn)
-		return AutoMigrate(conn)
+		// Each step gets a fresh session on the pinned connection: chained
+		// calls like Table("projects") would otherwise stick to the shared
+		// statement and send every later model's migration to that table.
+		fresh := func() *gorm.DB { return conn.Session(&gorm.Session{NewDB: true}) }
+		BackfillPublicIDs(fresh())
+		if err := AutoMigrate(fresh()); err != nil {
+			return err
+		}
+		DropStrayProjectColumns(fresh())
+		return nil
 	})
 	if err != nil {
 		log.Fatalf("Failed to auto migrate database: %v", err)
